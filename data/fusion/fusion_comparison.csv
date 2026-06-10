@@ -1,0 +1,8 @@
+method,recall_at_10,type
+Cross-attention,0.105,fusion
+Late fusion,0.105,fusion
+Early fusion,0.096,fusion
+TEXT-only,0.08,unimodal
+IMAGE-only,0.075,unimodal
+AUDIO-only,0.025,unimodal
+RANDOM,0.005,baseline

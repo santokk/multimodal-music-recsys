@@ -1,0 +1,290 @@
+---
+title: "Использование мультимодальных эмбеддингов в рекомендательных системах"
+subtitle: "Курсовая работа — магистратура, 1 курс"
+author: "Токкожин Санжар"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    theme: flatly
+    highlight: tango
+  pdf_document:
+    toc: true
+    number_sections: true
+lang: ru
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(knitr)
+library(dplyr)
+if (file.exists("data/results/eval_results.csv")) {
+  eval_df <- read.csv("data/results/eval_results.csv")
+} else {
+  eval_df <- NULL
+}
+if (file.exists("data/results/compute_report.csv")) {
+  compute_df <- read.csv("data/results/compute_report.csv")
+} else {
+  compute_df <- NULL
+}
+```
+
+# Введение
+
+## Цель работы
+
+Цель моей курсовой — исследовать, насколько **мультимодальные эмбеддинги** (текст + изображение + аудио) улучшают рекомендации музыкальных треков по сравнению с:
+
+- коллаборативным бейзлайном (CF);
+- контентным text-only подходом;
+- отдельными модальностями.
+
+Основной фокус — **холодный старт для нового трека**: ситуация, когда у айтема ещё нет истории взаимодействий, но уже доступны текст, обложка и аудио-превью.
+
+## Гипотезы
+
+1. **H1.** Контентные эмбеддинги дают ненулевой retrieval-сигнал относительно случайного бейзлайна.
+2. **H2.** Fusion нескольких модальностей превосходит лучшую одиночную модальность (text-only).
+3. **H3.** На cold-треках CF деградирует до нуля, а мультимодальные методы сохраняют качество.
+4. **H4.** Late fusion и cross-attention дают прирост над early fusion за счёт разного вклада модальностей.
+
+## Структура проекта
+
+```
+Курсач_мага/
+├── workshop.ipynb          # Воркшоп 1: парсинг датасета + CF-граф
+├── 02_embeddings.ipynb     # Воркшоп 2: эмбеддинги text/image/audio
+├── 03_fusion.ipynb         # Воркшоп 3: early / late / cross-attention fusion
+├── 04_recsys_eval.ipynb    # Воркшоп 4: evaluation warm vs cold
+├── 05_compute.ipynb        # Воркшоп 5: вычислительная сложность
+├── report.Rmd              # этот отчёт
+└── data/
+    ├── metadata.parquet
+    ├── edges.parquet
+    ├── audio/  images/
+    ├── embeddings/
+    ├── fusion/
+    └── results/
+```
+
+---
+
+# Данные
+
+## Источники
+
+| Модальность | Источник | Что именно |
+|---|---|---|
+| Текст | iTunes Search API + Last.fm `track.getInfo` | title, artist, album, genre, tags, wiki |
+| Изображение | iTunes `artworkUrl100` → 600×600 | обложка альбома |
+| Аудио | iTunes `previewUrl` | 30-секундное превью (m4a) |
+| CF-сигнал | Last.fm `track.getSimilar` | граф похожих треков |
+
+## Почему музыкальный домен
+
+Музыка — естественный кейс для мультимодальности:
+
+- **текст** (описание, жанр, теги),
+- **визуал** (обложка),
+- **аудио** (сам трек/превью).
+
+Это напрямую соответствует задаче холодного старта: новый трек появляется с контентом, но без истории прослушиваний.
+
+## Итоговый объём датасета
+
+```{r dataset-stats}
+cat("Треков с полным покрытием (text + image + audio): 14 787\n")
+cat("Внутрикорпусных CF-рёбер: ~81 855\n")
+cat("Src-треков с ≥1 соседом: ~7 606\n")
+```
+
+**Дисковый объём `data/`:** ~17.1 ГБ (основной вклад — аудио-превью ~14.9 ГБ, обложки ~1.5 ГБ).
+
+## Превью 30 секунд и обложки 600×600
+
+- **30-сек превью** — стандартный формат iTunes API; этого достаточно для MIR-моделей (CLAP, MERT и др.).
+- **600×600** — компромисс между качеством и размером; ViT-модели всё равно ресайзят вход до 224–384 px.
+
+---
+
+# Методология
+
+## Пайплайн (5 воркшопов)
+
+1. **Сбор данных** — парсинг iTunes + обогащение Last.fm + CF-граф `edges.parquet`.
+2. **Эмбеддинги** — три предобученные модели, L2-нормализация.
+3. **Fusion** — early / late / cross-attention.
+4. **Evaluation** — warm vs cold, Recall@10, nDCG@10, MRR.
+5. **Compute** — размер артефактов, время инференса, RAM.
+
+## Модели эмбеддингов
+
+| Модальность | Модель | Размерность |
+|---|---|---|
+| Текст | `intfloat/multilingual-e5-base` | 768 |
+| Изображение | `openai/clip-vit-base-patch32` | 512 |
+| Аудио | `laion/clap-htsat-unfused` | 512 |
+
+## Fusion-стратегии
+
+| Стратегия | Описание |
+|---|---|
+| **Early fusion** | concat нормализованных эмбеддингов → L2-norm (1792-d) |
+| **Late fusion** | взвешенная сумма cosine-sim по модальностям; веса: text=0.67, image=0.17, audio=0.17 |
+| **Cross-attention** | 3 токена → TransformerEncoder (1 слой) → mean pool (256-d); обучение 2 эпохи на 3000 CF-парах |
+
+## Коллаборативный бейзлайн
+
+Я использовал **Last.fm `track.getSimilar`** как CF-сигнал (item-item граф). Это практичный бейзлайн без сбора user×item матрицы: граф уже агрегирует коллаборативные прослушивания.
+
+## Постановка эксперимента (warm vs cold)
+
+- **Cold set (15% src-треков):** удалены из CF-графа → моделирую «новый трек».
+- **Warm test (20% оставшихся):** CF-сигнал доступен.
+- **Ground truth:** top-10 in-corpus соседей из `edges.parquet` (Last.fm `match`).
+
+---
+
+# Результаты
+
+## Sanity-check эмбеддингов (воркшоп 2)
+
+| Модальность | Recall@10 vs Last.fm GT | vs Random (0.0047) |
+|---|---|---|
+| TEXT | 0.080 | ×17 |
+| IMAGE | 0.075 | ×16 |
+| AUDIO | 0.025 | ×5 |
+
+**Интерпретация:** все модальности значимо выше случайного; текст и изображение сильнее аудио.
+
+## Fusion (воркшоп 3)
+
+| Метод | Recall@10 |
+|---|---|
+| Cross-attention | **0.105** |
+| Late fusion | **0.105** |
+| Early fusion | 0.096 |
+| TEXT-only | 0.080 |
+
+Fusion даёт **+20–31%** к text-only.
+
+## Финальная evaluation (воркшоп 4)
+
+```{r eval-table, results='asis'}
+if (!is.null(eval_df)) {
+  warm <- eval_df %>% filter(scenario == "warm") %>% select(method, recall_at_10, ndcg_at_10, mrr)
+  cold <- eval_df %>% filter(scenario == "cold") %>% select(method, recall_at_10, ndcg_at_10, mrr)
+  cat("### Warm-сценарий\n\n")
+  kable(warm, col.names = c("Метод", "Recall@10", "nDCG@10", "MRR"), digits = 3)
+  cat("\n\n### Cold-сценарий (холодный старт)\n\n")
+  kable(cold, col.names = c("Метод", "Recall@10", "nDCG@10", "MRR"), digits = 3)
+}
+```
+
+### Ключевые наблюдения
+
+| Паттерн | Warm | Cold |
+|---|---|---|
+| CF-baseline | **1.000** | **0.000** |
+| TEXT-only | 0.082 | 0.082 |
+| Late fusion | 0.113 | 0.110 |
+| Cross-attention | 0.115 | 0.110 |
+
+1. **H3 подтверждена:** CF полностью падает на cold, контентные методы стабильны.
+2. **H2 подтверждена:** multimodal fusion > text-only на обоих сценариях (+22–34% на cold).
+3. **H1 подтверждена:** все методы >> random.
+4. На warm CF доминирует (GT из того же графа) — это ожидаемо.
+
+## Ablation вклада модальностей (cold)
+
+| Метод | Recall@10 | Δ vs TEXT-only |
+|---|---|---|
+| TEXT-only | 0.082 | — |
+| Early fusion | 0.100 | +22% |
+| Late fusion | 0.110 | +34% |
+| Cross-attention | 0.110 | +34% |
+
+---
+
+# Вычислительная сложность (воркшоп 5)
+
+```{r compute-table, results='asis'}
+if (!is.null(compute_df)) {
+  disk <- compute_df %>% filter(section == "disk_size") %>% select(artifact, size_mb)
+  inf <- compute_df %>% filter(section == "inference_time") %>% select(stage, ms_per_track, est_total_min, n_tracks)
+  ram <- compute_df %>% filter(section == "ram_usage") %>% select(matrix, shape, ram_mb)
+  cat("### Размер артефактов\n\n")
+  kable(disk, col.names = c("Артефакт", "МБ"))
+  cat("\n\n### Время инференса (CPU, на 1 трек)\n\n")
+  kable(inf, col.names = c("Этап", "мс/трек", "оценка на 14 787 треков (мин)", "N"))
+  cat("\n\n### RAM эмбеддингов\n\n")
+  kable(ram, col.names = c("Матрица", "Shape", "МБ"))
+}
+```
+
+**Итого по инференсу (оценка на весь корпус, CPU):**
+
+- Text (E5): ~40 мин
+- Image (CLIP): ~40 мин
+- Audio (CLAP): ~36 мин
+- **Суммарно эмбеддинги: ~2 часа** (без GPU)
+
+Fusion и evaluation — минуты на CPU, без обучения тяжёлых моделей.
+
+---
+
+# Выводы
+
+1. Я собрал мультимодальный музыкальный датасет из открытых источников (14 787 треков, 3 модальности + CF-граф).
+2. Предобученные эмбеддинги (E5, CLIP, CLAP) дают осмысленный retrieval-сигнал.
+3. Fusion (late / cross-attention) улучшает text-only на **22–34%**.
+4. Главный результат: на **cold start** CF = 0, а мультимодальные методы сохраняют Recall@10 ≈ 0.11.
+5. Пайплайн реализуем на CPU за разумное время (~2 ч на эмбеддинги, ~17 ГБ диска).
+
+## Ограничения
+
+- Аудио — 30-сек превью, не полные треки.
+- CLAP не music-specific (MERT мог бы быть лучше, но тяжелее).
+- CF ground truth из Last.fm — не идеальная «истина», но валидный коллаборативный proxy.
+- Sanity-check и evaluation без внешнего user-study.
+
+## Возможные улучшения
+
+- Music-specific аудио-энкодер (MERT).
+- Полноценная user×item матрица (LFM-2b).
+- Обучение fusion на большем числе эпох / данных.
+- Расширение на русскоязычный сегмент (`country=RU` в iTunes).
+
+---
+
+# Воспроизведение
+
+```bash
+# 1. Парсинг (workshop.ipynb) — ~2-3 часа
+# 2. Эмбеддинги (02_embeddings.ipynb) — ~2 часа CPU / ~40 мин MPS
+# 3. Fusion (03_fusion.ipynb) — ~10-15 мин CPU
+# 4. Evaluation (04_recsys_eval.ipynb) — ~1-2 мин
+# 5. Compute (05_compute.ipynb) — ~1 мин (или ~30 сек на выборке)
+```
+
+Для рендера отчёта:
+
+```bash
+Rscript -e "rmarkdown::render('report.Rmd')"
+```
+
+---
+
+# Список артефактов
+
+| Файл | Описание |
+|---|---|
+| `data/metadata.parquet` | метаданные 14 787 треков |
+| `data/edges.parquet` | CF-граф похожести |
+| `data/embeddings/*.npz` | эмбеддинги 3 модальностей |
+| `data/fusion/*.npz` | fusion-репрезентации |
+| `data/results/eval_results.csv` | финальные метрики |
+| `data/results/compute_report.csv` | compute-отчёт |

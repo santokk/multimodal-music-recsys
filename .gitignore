@@ -1,0 +1,31 @@
+# Данные слишком большие для git (~17 ГБ)
+data/audio/
+data/images/
+data/raw/
+
+# Можно коммитить метаданные и результаты (раскомментируй если нужно):
+# !data/metadata.parquet
+# !data/edges.parquet
+# !data/embeddings/
+# !data/fusion/
+# !data/results/
+
+# Python / Jupyter
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# R Markdown
+report.html
+report.pdf
+
+# macOS
+.DS_Store
+
+# API keys — не коммитить
+.env
+.env.*
+
+# Большие бинарники (опционально раскомментируй если нужны в репо)
+# data/embeddings/
+# data/fusion/

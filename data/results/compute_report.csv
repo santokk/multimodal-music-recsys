@@ -1,0 +1,20 @@
+artifact,size_mb,section,stage,ms_per_track,est_total_min,n_tracks,matrix,shape,ram_mb
+metadata.parquet,8.95,disk_size,,,,,,,
+edges.parquet,21.87,disk_size,,,,,,,
+audio/,14855.19,disk_size,,,,,,,
+images/,1520.35,disk_size,,,,,,,
+embeddings/text.npz,40.21,disk_size,,,,,,,
+embeddings/image.npz,21.85,disk_size,,,,,,,
+embeddings/audio.npz,26.83,disk_size,,,,,,,
+fusion/early_fusion.npz,91.26,disk_size,,,,,,,
+fusion/cross_attention.npz,13.43,disk_size,,,,,,,
+fusion/cross_attention.pt,3.77,disk_size,,,,,,,
+results/eval_results.csv,0.0,disk_size,,,,,,,
+,,inference_time,text_e5,109.9,27.1,14787.0,,,
+,,inference_time,image_clip,94.1,23.2,14787.0,,,
+,,inference_time,audio_clap,139.8,34.5,14787.0,,,
+,,ram_usage,,,,,text,"(14787, 768)",43.3
+,,ram_usage,,,,,image,"(14787, 512)",28.9
+,,ram_usage,,,,,audio,"(14787, 512)",28.9
+,,ram_usage,,,,,early_fusion,"(14787, 1792)",101.1
+,,ram_usage,,,,,cross_attention,"(14787, 256)",14.4

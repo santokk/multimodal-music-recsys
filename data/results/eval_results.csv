@@ -1,0 +1,15 @@
+method,recall@10,ndcg@10,mrr,n_queries,scenario
+CF-baseline,1.0,1.0,1.0,1293,warm
+TEXT-only,0.082,0.119,0.172,1293,warm
+IMAGE-only,0.081,0.125,0.188,1293,warm
+AUDIO-only,0.023,0.024,0.045,1293,warm
+Early fusion,0.103,0.147,0.217,1293,warm
+Late fusion,0.113,0.152,0.219,1293,warm
+Cross-attention,0.115,0.133,0.204,1293,warm
+CF-baseline,0.0,0.0,0.0,1140,cold
+TEXT-only,0.082,0.126,0.187,1140,cold
+IMAGE-only,0.08,0.128,0.191,1140,cold
+AUDIO-only,0.023,0.022,0.044,1140,cold
+Early fusion,0.1,0.151,0.229,1140,cold
+Late fusion,0.11,0.159,0.236,1140,cold
+Cross-attention,0.11,0.135,0.212,1140,cold
